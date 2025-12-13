@@ -1,33 +1,233 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-    <title>Azure Times</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Azure Times — Repo Browser</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; }
+    header { padding: 16px 20px; border-bottom: 1px solid rgba(127,127,127,.25); display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    header h1 { margin: 0; font-size: 18px; }
+    .muted { opacity: .75; font-size: 13px; }
+    main { padding: 16px 20px; max-width: 1100px; margin: 0 auto; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between; margin-bottom: 12px; }
+    input[type="search"] { width: min(520px, 100%); padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); background: transparent; }
+    .crumbs { font-size: 13px; opacity: .9; }
+    .crumbs a { text-decoration: none; }
+    .crumbs a:hover { text-decoration: underline; }
+
+    .panel { border: 1px solid rgba(127,127,127,.25); border-radius: 14px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid rgba(127,127,127,.15); vertical-align: middle; }
+    th { text-align:left; font-size: 12px; letter-spacing: .02em; text-transform: uppercase; opacity: .75; }
+    tr:hover td { background: rgba(127,127,127,.08); }
+    .icon { width: 18px; display:inline-block; text-align:center; opacity:.9; }
+    .name a { text-decoration: none; }
+    .name a:hover { text-decoration: underline; }
+    .pill { display:inline-block; padding: 2px 8px; border: 1px solid rgba(127,127,127,.25); border-radius: 999px; font-size: 12px; opacity:.9; }
+    .actions { display:flex; gap:10px; flex-wrap:wrap; }
+    button, .btn {
+      padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35);
+      background: transparent; cursor:pointer; text-decoration:none; font-size: 13px;
+    }
+    button:hover, .btn:hover { background: rgba(127,127,127,.10); }
+    .error { padding: 12px; border: 1px solid rgba(255,0,0,.35); border-radius: 12px; color: #b00020; }
+    .footer { margin-top: 18px; font-size: 12px; opacity: .75; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  </style>
 </head>
 <body>
-    <h1>Azure Times</h1>
-    <p>Welcome to Azure Times, the community blog for all things Azure!</p>
+  <header>
+    <h1>Azure Times — GitHub Repo Browser</h1>
+    <div class="muted" id="repoInfo"></div>
+  </header>
 
-    <h2>About</h2>
-    <p>Azure Times is a professional community in the global Cloud Practice map for everyone who is passionate about MS Azure Cloud. It intends to provide updates and insights from the real-world Azure evangelists, Cloud architects, and practitioners, establish experience and expertise sharing and engage people to active collaboration for having a world-class community of Azure Cloud professionals. This is the series of weekly online meetups, where we discuss a big scope of Cloud-related industry news, Microsoft product releases and updates, professional findings, and best practices that could be reusable within dedicated project teams, but not only. Meetings are going to be hosted in English.</p>
+  <main>
+    <div class="row">
+      <div class="crumbs" id="breadcrumbs"></div>
+      <div class="actions">
+        <a class="btn" id="openGitHub" target="_blank" rel="noopener">Open on GitHub</a>
+        <button id="refreshBtn" type="button">Refresh</button>
+      </div>
+    </div>
 
-    <h2>Topics</h2>
-    <p>We cover a wide range of topics, including but not limited to:</p>
-    <ul>
-        <li>Azure Fundamentals</li>
-        <li>Azure DevOps</li>
-        <li>Azure Machine Learning</li>
-        <li>Azure Functions</li>
-        <li>Azure Logic Apps</li>
-        <li>Azure Kubernetes Service (AKS)</li>
-    </ul>
+    <div class="row">
+      <input id="filter" type="search" placeholder="Filter files/folders…" />
+      <div class="muted"><span class="pill" id="branchPill"></span></div>
+    </div>
 
-    <h2>Contribute</h2>
-    <p>We welcome contributions from the community. If you have an Azure-related topic you'd like to write about, please get in touch!</p>
+    <div id="status"></div>
 
-    <h2>Contact</h2>
-    <p>For any queries or suggestions, please contact us at <a href="mailto:rotarmaksim@gmail.com">azuretimes@community.com</a>.</p>
+    <div class="panel">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:40px;"></th>
+            <th>Name</th>
+            <th style="width:160px;">Type</th>
+            <th style="width:220px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="listing"></tbody>
+      </table>
+    </div>
 
-    <h2>Disclaimer</h2>
-    <p>The views and opinions expressed in this blog are those of the authors and do not necessarily reflect the official policy or position of any other agency, organization, employer or company.</p>
+    <div class="footer">
+      Powered by GitHub Contents API. If you hit rate limits, reload later or add authenticated calls (optional).
+    </div>
+  </main>
+
+<script>
+(() => {
+  // === CONFIG ===
+  const OWNER = "azuretimes";
+  const REPO  = "meetups";
+  const DEFAULT_BRANCH = "main"; // change if your default is "master"
+  // =============
+
+  const qs = new URLSearchParams(location.search);
+  const path = (qs.get("path") || "").replace(/^\/+|\/+$/g, ""); // normalize
+  const ref  = (qs.get("ref") || DEFAULT_BRANCH);
+
+  const el = (id) => document.getElementById(id);
+  const listing = el("listing");
+  const status  = el("status");
+  const filter  = el("filter");
+
+  el("repoInfo").textContent = `${OWNER}/${REPO}`;
+  el("branchPill").textContent = `ref: ${ref}`;
+
+  const ghRepoUrl = `https://github.com/${OWNER}/${REPO}`;
+  el("openGitHub").href = path ? `${ghRepoUrl}/tree/${ref}/${path}` : `${ghRepoUrl}/tree/${ref}`;
+
+  el("refreshBtn").addEventListener("click", () => load());
+
+  function setStatus(html, isError=false) {
+    status.innerHTML = isError ? `<div class="error">${html}</div>` : html;
+  }
+
+  function iconFor(type) {
+    if (type === "dir") return "📁";
+    if (type === "file") return "📄";
+    return "❓";
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function breadcrumbs() {
+    const parts = path ? path.split("/") : [];
+    let acc = "";
+    const items = [`<a href="?ref=${encodeURIComponent(ref)}">root</a>`];
+    for (const p of parts) {
+      acc = acc ? `${acc}/${p}` : p;
+      items.push(`<a href="?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(acc)}">${escapeHtml(p)}</a>`);
+    }
+    el("breadcrumbs").innerHTML = items.join(" / ");
+  }
+
+  function row(item) {
+    const name = item.name;
+    const type = item.type;
+    const fullPath = item.path;
+
+    const nextUrl = `?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(fullPath)}`;
+    const rawUrl  = item.download_url; // null for dirs
+    const viewUrl = `${ghRepoUrl}/blob/${ref}/${fullPath}`;
+
+    const openLink = (type === "dir")
+      ? `<a href="${nextUrl}">Open</a>`
+      : `<a href="${viewUrl}" target="_blank" rel="noopener">View</a>`;
+
+    const downloadLink = (type === "file" && rawUrl)
+      ? `<a href="${rawUrl}" target="_blank" rel="noopener">Raw</a>`
+      : "";
+
+    return `
+      <tr data-name="${escapeHtml(name.toLowerCase())}" data-type="${escapeHtml(type)}">
+        <td><span class="icon">${iconFor(type)}</span></td>
+        <td class="name">
+          ${type === "dir"
+            ? `<a href="${nextUrl}">${escapeHtml(name)}/</a>`
+            : `<a href="${viewUrl}" target="_blank" rel="noopener">${escapeHtml(name)}</a>`
+          }
+        </td>
+        <td><span class="pill">${escapeHtml(type)}</span></td>
+        <td>
+          <div class="actions">
+            ${openLink}
+            ${downloadLink}
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function applyFilter() {
+    const q = (filter.value || "").trim().toLowerCase();
+    const rows = listing.querySelectorAll("tr");
+    rows.forEach(r => {
+      const name = r.getAttribute("data-name") || "";
+      const show = !q || name.includes(q);
+      r.style.display = show ? "" : "none";
+    });
+  }
+
+  filter.addEventListener("input", applyFilter);
+
+  async function load() {
+    breadcrumbs();
+    listing.innerHTML = "";
+    setStatus(`<div class="muted">Loading <code>${path || "/"}</code>…</div>`);
+
+    const apiUrl = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${path ? encodeURIComponent(path) : ""}?ref=${encodeURIComponent(ref)}`;
+
+    try {
+      const res = await fetch(apiUrl, { headers: { "Accept": "application/vnd.github+json" } });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`GitHub API error (${res.status}): ${text}`);
+      }
+      const data = await res.json();
+
+      // If a file is requested, GitHub returns an object, not array.
+      if (!Array.isArray(data)) {
+        setStatus(`This path points to a file. <a href="${ghRepoUrl}/blob/${ref}/${data.path}" target="_blank" rel="noopener">Open it on GitHub</a>.`);
+        return;
+      }
+
+      // Sort: folders first, then files, then alpha
+      data.sort((a,b) => {
+        if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      // Add parent link
+      if (path) {
+        const parent = path.split("/").slice(0,-1).join("/");
+        listing.insertAdjacentHTML("beforeend", `
+          <tr>
+            <td><span class="icon">⬅️</span></td>
+            <td class="name"><a href="?ref=${encodeURIComponent(ref)}&path=${encodeURIComponent(parent)}">..</a></td>
+            <td><span class="pill">parent</span></td>
+            <td></td>
+          </tr>
+        `);
+      }
+
+      listing.innerHTML += data.map(row).join("");
+      setStatus(`<div class="muted">Showing <code>${data.length}</code> items in <code>${path || "/"}</code>.</div>`);
+      applyFilter();
+    } catch (e) {
+      setStatus(`Failed to load. ${escapeHtml(e.message)}<br><br>
+        Tip: GitHub API is rate-limited for anonymous requests. If this happens often, consider adding an authenticated proxy or using a static manifest.`, true);
+    }
+  }
+
+  load();
+})();
+</script>
 </body>
 </html>
